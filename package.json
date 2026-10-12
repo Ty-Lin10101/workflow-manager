@@ -1,0 +1,31 @@
+{
+  "name": "todo-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start:electron": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.3.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.0.28",
+    "@types/react-dom": "18.0.11",
+    "concurrently": "7.6.0",
+    "wait-on": "7.0.1",
+    "electron": "26.1.0",
+    "typescript": "5.1.6",
+    "vite": "5.1.0",
+    "@vitejs/plugin-react": "4.3.4",
+    "@tauri-apps/cli": "2.3.0"
+  }
+}
