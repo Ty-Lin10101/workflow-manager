@@ -4,13 +4,13 @@ Todo Desktop is a small desktop task manager organized around workflows. A workf
 
 ## Architecture
 
-The app has a shared React and TypeScript frontend, built by Vite, with desktop host options for Electron and Tauri. The frontend can also run in a browser.
+The app has a shared React and TypeScript frontend, built by Vite, with desktop host options for Electron and Tauri. The frontend can also run in a browser. The backend foundation adds local SQL storage for offline use and a Supabase/PostgreSQL service for shared workflows.
 
 ```text
 React UI (src/)
-    ├── Electron preload bridge → Electron main process → workflows.json
-    ├── Tauri invoke commands → Rust host → workflows.json
-    └── Browser/no native host → localStorage
+    ├── Electron preload bridge → Electron main process → legacy JSON persistence (not in current backend scope)
+    ├── Tauri invoke commands → Rust host → local SQLite + outbox
+    └── Supabase Auth + PostgreSQL → shared workflows + sync event feed
 ```
 
 ### Frontend
@@ -26,13 +26,43 @@ The UI is split by responsibility while the app-level state stays in one place. 
 
 ### Desktop hosts and persistence
 
-`App.tsx` uses the host API when one is available and falls back to browser `localStorage`:
+The existing renderer currently persists through its host `loadWorkflows` /
+`saveWorkflows` methods when available, then falls back to browser `localStorage`.
+The native SQLite/outbox APIs are backend foundations; wiring the UI and sync
+status to those APIs is a separate client-integration step.
 
-- **Electron:** `electron/main.js` creates the window and handles file access through IPC. `electron/preload.js` exposes the limited `loadWorkflows` and `saveWorkflows` methods to the renderer. Workflow data is stored as `workflows.json` under Electron's user-data directory.
-- **Tauri:** `src-tauri/src/lib.rs` registers `load_workflows` and `save_workflows` commands. The React frontend calls these with Tauri's `invoke` API, and the Rust host reads and writes `workflows.json` in the app directory.
-- **Browser/fallback:** The frontend stores serialized workflows in `localStorage` under `todo_desktop_workflows_v1`.
+- **Electron:** `electron/main.js` owns filesystem access and IPC. `electron/preload.js` exposes the existing workflow snapshot methods. Electron persistence remains JSON-based and is deferred from the current Tauri-focused backend scope.
+- **Tauri:** `src-tauri/src/lib.rs` owns native commands and local SQL access. It stores workflows, tasks, and the durable sync outbox in SQLite.
+- **Browser/fallback:** The current renderer stores serialized workflows in `localStorage` under `todo_desktop_workflows_v1`; it does not yet provide SQL-backed offline sync in a browser.
 
-Native hosts keep filesystem operations outside the React UI and expose only the operations the frontend needs. JSON storage keeps the persistence layer small and easy to inspect for this single-user app; a database or remote service would add complexity without a current need for multi-user access or server-side queries.
+Native hosts keep database and file operations outside the React UI and expose
+only application-level commands. SQLite supports indexed queries and
+transactional outbox writes without requiring a network connection. The
+outbox keeps an operation ID and expected server version so retries are
+idempotent and concurrent edits can be reported as conflicts instead of
+silently overwriting data.
+
+### Shared workflows and server sync
+
+Supabase provides hosted PostgreSQL and user authentication. The database
+migration under `supabase/migrations/` creates normalized workflow, task,
+membership, and sync-event tables; row-level security limits reads by
+membership, and server-side RPCs validate writes and roles. Indexed SQL RPCs
+provide bounded keyset pages rather than fetching and sorting an entire task
+list on each request.
+
+Clients push batches of outbox operations with optimistic versions, then pull
+bounded change events by cursor. A conflict returns the server version for
+explicit resolution. If event history has been pruned, the server requires a
+fresh membership-visible snapshot before sync resumes. Offline edits remain
+in the local outbox until the server acknowledges or the user resolves them.
+The global transactional cursor favors reliable ordered sync and simple
+recovery; a much higher write rate may call for per-workflow cursor streams.
+
+See [supabase/README.md](./supabase/README.md) for setup, RPC payloads, cursor
+handling, role rules, and deployment guidance. Desktop clients must use only a
+Supabase publishable/anon key with user authentication; the service-role key is
+reserved for trusted maintenance and must never be bundled with the app.
 
 ### Desktop framework choices
 
