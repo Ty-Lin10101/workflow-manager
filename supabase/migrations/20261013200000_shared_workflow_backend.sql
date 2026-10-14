@@ -203,7 +203,7 @@ returns table (
   created_at timestamptz,
   updated_at timestamptz,
   deleted_at timestamptz,
-  position bigint
+  "position" bigint
 )
 language plpgsql
 stable
