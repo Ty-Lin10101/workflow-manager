@@ -676,6 +676,23 @@ select set_config(
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000003', true);
 
 select is(
+  (select count(*)::integer
+   from jsonb_array_elements(
+     public.sync_pull(
+       (select (result_value #>> '{}')::bigint
+        from backend_test_results
+        where result_key = 'cursor_before_member_revoke'),
+       10
+     ) -> 'events'
+   ) event
+   where event.value ->> 'entity_type' = 'membership_revoked'
+     and event.value ->> 'entity_id' = '00000000-0000-0000-0000-000000000003'
+     and event.value ->> 'action' = 'delete'),
+  1,
+  'revoked members can pull their scoped removal event'
+);
+
+select is(
   (public.sync_snapshot_anchor() ->> 'workflow_order_version')::bigint,
   (select version
    from public.workflow_order_state
