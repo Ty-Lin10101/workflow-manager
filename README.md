@@ -8,7 +8,7 @@ The app has a shared React and TypeScript frontend, built by Vite, with desktop 
 
 ```text
 React UI (src/)
-    ├── Electron preload bridge → Electron main process → local SQLite + outbox
+    ├── Electron preload bridge → Electron main process → legacy JSON persistence (not in current backend scope)
     ├── Tauri invoke commands → Rust host → local SQLite + outbox
     └── Supabase Auth + PostgreSQL → shared workflows + sync event feed
 ```
@@ -31,7 +31,7 @@ The existing renderer currently persists through its host `loadWorkflows` /
 The native SQLite/outbox APIs are backend foundations; wiring the UI and sync
 status to those APIs is a separate client-integration step.
 
-- **Electron:** `electron/main.js` owns filesystem access and IPC. `electron/preload.js` exposes a narrow API to the renderer. The backend stores normalized local data and pending mutations in SQLite.
+- **Electron:** `electron/main.js` owns filesystem access and IPC. `electron/preload.js` exposes the existing workflow snapshot methods. Electron persistence remains JSON-based and is deferred from the current Tauri-focused backend scope.
 - **Tauri:** `src-tauri/src/lib.rs` owns native commands and local SQL access. It stores workflows, tasks, and the durable sync outbox in SQLite.
 - **Browser/fallback:** The current renderer stores serialized workflows in `localStorage` under `todo_desktop_workflows_v1`; it does not yet provide SQL-backed offline sync in a browser.
 
