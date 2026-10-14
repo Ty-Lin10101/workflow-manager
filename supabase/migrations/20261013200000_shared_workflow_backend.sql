@@ -72,7 +72,9 @@ insert into public.sync_clock (singleton, last_cursor) values (true, 0);
 create table public.sync_events (
   cursor bigint primary key,
   workflow_id uuid,
-  entity_type text not null check (entity_type in ('workflow', 'todo', 'workflow_order', 'membership')),
+  entity_type text not null check (
+    entity_type in ('workflow', 'todo', 'workflow_order', 'membership', 'membership_revoked')
+  ),
   entity_id uuid not null,
   version bigint not null,
   action text not null check (action in ('upsert', 'delete')),
@@ -86,6 +88,9 @@ create index sync_events_workflow_cursor_idx
 create index sync_events_actor_cursor_idx
   on public.sync_events (changed_by, cursor)
   where entity_type = 'workflow_order';
+create index sync_events_revoked_user_cursor_idx
+  on public.sync_events (entity_id, cursor)
+  where entity_type = 'membership_revoked';
 
 create table public.sync_operations (
   operation_id uuid primary key,
@@ -160,6 +165,7 @@ create policy sync_events_read_member
   on public.sync_events for select to authenticated
   using (
     (entity_type = 'workflow_order' and changed_by = auth.uid())
+    or (entity_type = 'membership_revoked' and entity_id = auth.uid())
     or (
       public.is_workflow_member(workflow_id)
       and (
@@ -1034,6 +1040,10 @@ begin
           and event.changed_by = auth.uid()
         )
         or (
+          event.entity_type = 'membership_revoked'
+          and event.entity_id = auth.uid()
+        )
+        or (
           public.is_workflow_member(event.workflow_id)
           and (
             exists (
@@ -1236,6 +1246,8 @@ set search_path = public, pg_temp
 as $$
 declare
   v_rows integer;
+  v_cursor bigint;
+  v_order_version bigint;
 begin
   if auth.uid() is null then
     raise exception 'Authentication is required';
@@ -1273,7 +1285,27 @@ begin
     update public.workflow_order_state
     set version = version + 1,
         updated_at = clock_timestamp()
-    where user_id = p_user_id;
+    where user_id = p_user_id
+    returning version into v_order_version;
+
+    update public.sync_clock
+    set last_cursor = last_cursor + 1
+    where singleton
+    returning last_cursor into v_cursor;
+
+    insert into public.sync_events (
+      cursor, workflow_id, entity_type, entity_id, version, action, payload, changed_by
+    )
+    values (
+      v_cursor, p_workflow_id, 'membership_revoked', p_user_id, v_order_version,
+      'delete',
+      jsonb_build_object(
+        'workflow_id', p_workflow_id,
+        'user_id', p_user_id,
+        'workflow_order_version', v_order_version
+      ),
+      auth.uid()
+    );
   end if;
 end;
 $$;

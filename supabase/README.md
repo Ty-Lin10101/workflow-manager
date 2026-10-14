@@ -32,7 +32,9 @@ in user's access token.
   soft-delete tombstones, and monotonically increasing entity versions.
 - `workflow_members` maps users to workflows as `owner`, `editor`, or `viewer`.
   Sharing is controlled by the owner. Workflow order is a per-user preference,
-  not shared state.
+  not shared state. Share and revoke changes update that user's order version;
+  a revoked user receives a scoped removal event without continued read access
+  to the workflow's task or history data.
 - Row-level security permits authenticated members to read active workflows
   and tasks. All writes go through security-definer RPCs that validate the
   caller, role, payload, and expected version. A viewer cannot write; only an
@@ -52,7 +54,8 @@ and tasks use `expected_version: 0`; edits and deletes use the last server
 version observed by the client. Todo operations also include `workflow_id`.
 Workflow ordering is represented by `entity_type: "workflow_order"`,
 `entity_id` equal to the signed-in user ID, and a `workflow_ids` array in the
-payload.
+payload. Its `expected_version` is the per-user workflow-order version returned
+by `sync_snapshot_anchor()` or the last applied order/membership result.
 
 Send up to 100 pending operations in one atomic call to
 `sync_apply_batch({ p_operations: [...] })`. The server remembers each
@@ -70,6 +73,7 @@ account, submit its pending outbox first. Preserve the outbox until every
 operation has an applied or explicitly resolved conflict result.
 
 1. Call `sync_snapshot_anchor()` and save its returned cursor.
+   Save `workflow_order_version` from the same response.
 2. Page through `list_workflows()` and `list_todos()` to replace the local
    membership-visible snapshot. Reconcile memberships on every online
    bootstrap so a removed member's cached workflows are no longer presented.
