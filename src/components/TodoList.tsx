@@ -125,7 +125,7 @@ export default function TodoList({ workflow, onChange, onClearCompleted }: Props
       <header>
         <h2>{workflow.name}</h2>
         <div className="controls">
-          <button onClick={onClearCompleted}>Clear finished</button>
+          <button onClick={onClearCompleted}>Clear all finished tasks</button>
         </div>
       </header>
 
@@ -170,6 +170,11 @@ export default function TodoList({ workflow, onChange, onClearCompleted }: Props
               }
             }}
           >
+            {sortMode === 'manual' && (
+              <span className="drag-indicator" aria-hidden="true" title="Drag to reorder">
+                ⋮⋮
+              </span>
+            )}
             {editingId === t.id ? (
               <div className="todo-edit-form">
                 <input
