@@ -531,7 +531,10 @@ begin
       raise exception 'workflow_order entity_id must match the current user';
     end if;
 
-    select coalesce(array_agg(item.workflow_id order by item.ordinality), array[]::uuid[])
+    select coalesce(
+      array_agg(item.workflow_id::uuid order by item.ordinality),
+      array[]::uuid[]
+    )
     into v_workflow_ids
     from jsonb_array_elements_text(v_payload -> 'workflow_ids')
       with ordinality as item(workflow_id, ordinality);
@@ -563,6 +566,14 @@ begin
         'entity_id', v_entity_id,
         'version', v_order_version,
         'current', v_current_order
+      );
+    elsif v_current_order = to_jsonb(v_workflow_ids) then
+      v_result := jsonb_build_object(
+        'status', 'applied',
+        'entity_type', v_entity_type,
+        'entity_id', v_entity_id,
+        'version', v_order_version,
+        'current', jsonb_build_object('workflow_ids', to_jsonb(v_workflow_ids))
       );
     else
       perform public.set_workflow_order(v_workflow_ids);
@@ -617,7 +628,8 @@ begin
   into v_role
   from public.workflow_members member
   where member.workflow_id = v_workflow_id
-    and member.user_id = v_user_id;
+    and member.user_id = v_user_id
+  for share;
 
   if v_entity_type = 'workflow' then
     select *
@@ -647,6 +659,14 @@ begin
         values (v_entity_id, v_name, v_user_id)
         returning * into v_workflow;
 
+        insert into public.workflow_order_state (user_id)
+        values (v_user_id)
+        on conflict (user_id) do nothing;
+        perform 1
+        from public.workflow_order_state state
+        where state.user_id = v_user_id
+        for update;
+
         select coalesce(max(member.position) + 1, 0)
         into v_position
         from public.workflow_members member
@@ -654,6 +674,12 @@ begin
 
         insert into public.workflow_members (workflow_id, user_id, role, position, added_by)
         values (v_entity_id, v_user_id, 'owner', v_position, v_user_id);
+
+        update public.workflow_order_state
+        set version = version + 1,
+            updated_at = clock_timestamp()
+        where user_id = v_user_id
+        returning version into v_order_version;
 
         update public.sync_clock
         set last_cursor = last_cursor + 1
@@ -665,7 +691,12 @@ begin
         )
         values (
           v_cursor, v_entity_id, 'workflow', v_entity_id, v_workflow.version,
-          'upsert', to_jsonb(v_workflow), v_user_id
+          'upsert',
+          to_jsonb(v_workflow) || jsonb_build_object(
+            'position', v_position,
+            'workflow_order_version', v_order_version
+          ),
+          v_user_id
         );
 
         v_result := jsonb_build_object(
@@ -673,8 +704,12 @@ begin
           'entity_type', v_entity_type,
           'entity_id', v_entity_id,
           'version', v_workflow.version,
+          'workflow_order_version', v_order_version,
           'cursor', v_cursor,
-          'current', to_jsonb(v_workflow)
+          'current', to_jsonb(v_workflow) || jsonb_build_object(
+            'position', v_position,
+            'workflow_order_version', v_order_version
+          )
         );
       end if;
     elsif coalesce(v_role not in ('owner', 'editor'), true) then
@@ -1046,9 +1081,12 @@ set search_path = public, pg_temp
 as $$
   select jsonb_build_object(
     'cursor', clock.last_cursor,
-    'min_retained_cursor', clock.min_retained_cursor
+    'min_retained_cursor', clock.min_retained_cursor,
+    'workflow_order_version', coalesce(state.version, 0)
   )
   from public.sync_clock clock
+  left join public.workflow_order_state state
+    on state.user_id = auth.uid()
   where clock.singleton
     and auth.uid() is not null;
 $$;
@@ -1066,7 +1104,7 @@ declare
   v_min_retained_cursor bigint;
   v_deleted integer;
 begin
-  if auth.role() <> 'service_role' then
+  if auth.role() is distinct from 'service_role' then
     raise exception 'Only the service role can prune sync history';
   end if;
   if p_through_cursor is null or p_through_cursor < 0 then
@@ -1111,6 +1149,7 @@ as $$
 declare
   v_cursor bigint;
   v_member_version bigint;
+  v_order_version bigint;
 begin
   if auth.uid() is null then
     raise exception 'Authentication is required';
@@ -1121,18 +1160,26 @@ begin
   if p_user_id is null then
     raise exception 'user_id is required';
   end if;
-  perform 1
-  from public.workflows workflow
-  where workflow.id = p_workflow_id
-    and workflow.owner_id = auth.uid()
-    and workflow.deleted_at is null
-  for update;
-  if not found then
+  if not exists (
+    select 1
+    from public.workflows workflow
+    where workflow.id = p_workflow_id
+      and workflow.owner_id = auth.uid()
+      and workflow.deleted_at is null
+  ) then
     raise exception 'Only the workflow owner can manage sharing';
   end if;
   if p_user_id = auth.uid() then
     raise exception 'The owner cannot change their own role';
   end if;
+
+  insert into public.workflow_order_state (user_id)
+  values (p_user_id)
+  on conflict (user_id) do nothing;
+  perform 1
+  from public.workflow_order_state state
+  where state.user_id = p_user_id
+  for update;
 
   insert into public.workflow_members (workflow_id, user_id, role, position, added_by)
   select
@@ -1147,7 +1194,17 @@ begin
   do update set role = excluded.role,
                 version = workflow_members.version + 1,
                 added_by = excluded.added_by
+  where workflow_members.role <> excluded.role
   returning version into v_member_version;
+  if not found then
+    return;
+  end if;
+
+  update public.workflow_order_state
+  set version = version + 1,
+      updated_at = clock_timestamp()
+  where user_id = p_user_id
+  returning version into v_order_version;
 
   update public.sync_clock
   set last_cursor = last_cursor + 1
@@ -1163,7 +1220,8 @@ begin
       'workflow_id', p_workflow_id,
       'user_id', p_user_id,
       'role', p_role,
-      'version', v_member_version
+      'version', v_member_version,
+      'workflow_order_version', v_order_version
     ),
     auth.uid()
   );
@@ -1176,6 +1234,8 @@ language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
+declare
+  v_rows integer;
 begin
   if auth.uid() is null then
     raise exception 'Authentication is required';
@@ -1195,10 +1255,26 @@ begin
     raise exception 'user_id is required';
   end if;
 
+  insert into public.workflow_order_state (user_id)
+  values (p_user_id)
+  on conflict (user_id) do nothing;
+  perform 1
+  from public.workflow_order_state state
+  where state.user_id = p_user_id
+  for update;
+
   delete from public.workflow_members
   where workflow_id = p_workflow_id
     and user_id = p_user_id
     and role <> 'owner';
+  get diagnostics v_rows = row_count;
+
+  if v_rows > 0 then
+    update public.workflow_order_state
+    set version = version + 1,
+        updated_at = clock_timestamp()
+    where user_id = p_user_id;
+  end if;
 end;
 $$;
 
