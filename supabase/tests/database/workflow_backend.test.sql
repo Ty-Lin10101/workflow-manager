@@ -55,24 +55,34 @@ select ok(
 );
 
 select ok(
-  has_column('public', 'workflows', 'owner_id')
-    and has_column('public', 'workflows', 'version')
-    and has_column('public', 'workflow_members', 'role')
-    and has_column('public', 'todos', 'workflow_id')
-    and has_column('public', 'todos', 'position')
-    and has_column('public', 'todos', 'version')
-    and has_column('public', 'sync_events', 'cursor')
-      and has_column('public', 'sync_operations', 'operation_id')
-      and has_column('public', 'workflow_order_state', 'version')
-      and has_column('public', 'sync_clock', 'min_retained_cursor'),
+  (select count(*) = 10
+   from information_schema.columns
+   where table_schema = 'public'
+     and (table_name, column_name) in (
+       ('workflows', 'owner_id'),
+       ('workflows', 'version'),
+       ('workflow_members', 'role'),
+       ('todos', 'workflow_id'),
+       ('todos', 'position'),
+       ('todos', 'version'),
+       ('sync_events', 'cursor'),
+       ('sync_operations', 'operation_id'),
+       ('workflow_order_state', 'version'),
+       ('sync_clock', 'min_retained_cursor')
+     )),
   'schema contains ownership, membership, version, and sync cursor fields'
 );
 
 select ok(
-  has_index('public', 'workflows', 'workflows_owner_updated_idx')
-    and has_index('public', 'workflow_members', 'workflow_members_user_position_idx')
-    and has_index('public', 'todos', 'todos_workflow_position_idx')
-    and has_index('public', 'sync_events', 'sync_events_workflow_cursor_idx'),
+  (select count(*) = 4
+   from pg_catalog.pg_indexes
+   where schemaname = 'public'
+     and indexname in (
+       'workflows_owner_updated_idx',
+       'workflow_members_user_position_idx',
+       'todos_workflow_position_idx',
+       'sync_events_workflow_cursor_idx'
+     )),
   'key lookup and cursor indexes exist'
 );
 
