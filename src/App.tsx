@@ -4,89 +4,86 @@ import WorkflowList from './components/WorkflowList'
 import TodoList from './components/TodoList'
 import NewWorkflowForm from './components/NewWorkflowForm'
 
-declare module '@tauri-apps/api/core' {
-  export function invoke<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T>
-}
-
 const STORAGE_KEY = 'todo_desktop_workflows_v1'
 
-async function tryLoadFromTauri(): Promise<string | null> {
-  try {
-    // dynamic import so it doesn't break web builds
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { invoke } = await import('@tauri-apps/api/core')
-    const res = await invoke('load_workflows')
-    return typeof res === 'string' ? res : null
-  } catch {
-    return null
-  }
+function readLocalWorkflows(): Workflow[] {
+  const raw = localStorage.getItem(STORAGE_KEY)
+  return raw ? ensureUniqueTaskIds(JSON.parse(raw) as Workflow[]) : []
 }
 
 export default function App() {
-  const [workflows, setWorkflows] = useState<Workflow[]>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (!raw) return []
-      return ensureUniqueTaskIds(JSON.parse(raw) as Workflow[])
-    } catch {
-      return []
-    }
-  })
-  const [activeId, setActiveId] = useState<string | null>(workflows[0]?.id ?? null)
+  const [workflows, setWorkflows] = useState<Workflow[]>([])
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [storageError, setStorageError] = useState<string | null>(null)
 
-  // load from native hosts (Electron or Tauri) on mount if available
   useEffect(() => {
-    ;(async () => {
+    let cancelled = false
+    const load = async () => {
       try {
-        // Electron
-        // @ts-ignore
-        if (window?.electron?.loadWorkflows) {
-          // @ts-ignore
-          const raw = await window.electron.loadWorkflows()
-          if (raw) {
-            const parsed = ensureUniqueTaskIds(JSON.parse(raw) as Workflow[])
-            setWorkflows(parsed)
-            return
-          }
+        let raw: string | null = null
+        let tauri = false
+
+        if (window.electron?.loadWorkflows) {
+          raw = await window.electron.loadWorkflows()
+        } else {
+          const api = await import('@tauri-apps/api/core')
+          tauri = api.isTauri()
+          if (tauri) raw = await api.invoke<string | null>('load_workflows')
         }
 
-        // Tauri
-        const tauriRaw = await tryLoadFromTauri()
-        if (tauriRaw) {
-          setWorkflows(ensureUniqueTaskIds(JSON.parse(tauriRaw) as Workflow[]))
-          return
+        const storedWorkflows = raw
+          ? ensureUniqueTaskIds(JSON.parse(raw) as Workflow[])
+          : readLocalWorkflows()
+        if (cancelled) return
+        setWorkflows(storedWorkflows)
+
+        if (tauri && !raw && storedWorkflows.length > 0) {
+          const { invoke } = await import('@tauri-apps/api/core')
+          await invoke('save_workflows', { data: JSON.stringify(storedWorkflows) })
         }
-      } catch {
-        // ignore
+        if (!cancelled) setLoaded(true)
+      } catch (error) {
+        if (cancelled) return
+        setLoadError(`Could not load saved workflows: ${String(error)}`)
+        setLoaded(true)
       }
-    })()
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
-  // persist to native hosts or localStorage
   useEffect(() => {
-    ;(async () => {
+    if (!loaded || loadError) return
+    let cancelled = false
+    const save = async () => {
       const payload = JSON.stringify(workflows)
       try {
-        // @ts-ignore
-        if (window?.electron?.saveWorkflows) {
-          // @ts-ignore
+        if (window.electron?.saveWorkflows) {
           await window.electron.saveWorkflows(payload)
-          return
+        } else {
+          const { invoke, isTauri } = await import('@tauri-apps/api/core')
+          if (isTauri()) {
+            await invoke('save_workflows', { data: payload })
+          } else {
+            localStorage.setItem(STORAGE_KEY, payload)
+          }
         }
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const { invoke } = await import('@tauri-apps/api/core')
-          await invoke('save_workflows', { data: payload })
-          return
-        } catch {}
-      } catch {}
+        if (!cancelled) setStorageError(null)
+      } catch (error) {
+        if (!cancelled) setStorageError(`Could not save workflows: ${String(error)}`)
+      }
+    }
 
-      // fallback to localStorage
-      try {
-        localStorage.setItem(STORAGE_KEY, payload)
-      } catch {}
-    })()
-  }, [workflows])
+    void save()
+    return () => {
+      cancelled = true
+    }
+  }, [workflows, loaded, loadError])
 
   useEffect(() => {
     if (!activeId && workflows.length) setActiveId(workflows[0].id)
@@ -130,6 +127,11 @@ export default function App() {
 
   return (
     <div className="app">
+      {(loadError || storageError) && (
+        <div className="storage-error" role="alert">
+          {loadError || storageError}
+        </div>
+      )}
       <aside className="sidebar">
         <h1>Workflows</h1>
         <WorkflowList

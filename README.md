@@ -26,21 +26,16 @@ The UI is split by responsibility while the app-level state stays in one place. 
 
 ### Desktop hosts and persistence
 
-The existing renderer currently persists through its host `loadWorkflows` /
-`saveWorkflows` methods when available, then falls back to browser `localStorage`.
-The native SQLite/outbox APIs are backend foundations; wiring the UI and sync
-status to those APIs is a separate client-integration step.
+The renderer persists through its host `loadWorkflows` / `saveWorkflows`
+methods when available, then falls back to browser `localStorage`.
 
 - **Electron:** `electron/main.js` owns filesystem access and IPC. `electron/preload.js` exposes the existing workflow snapshot methods. Electron persistence remains JSON-based and is deferred from the current Tauri-focused backend scope.
-- **Tauri:** `src-tauri/src/lib.rs` owns native commands and local SQL access. It stores workflows, tasks, and the durable sync outbox in SQLite.
+- **Tauri:** `src-tauri/src/lib.rs` stores workflows and tasks in SQLite under the platform-specific application data directory. Workflow and task ordering, due dates, durations, notes, and completion state are persisted transactionally. On first run it imports an existing `workflows.json` file from that directory.
 - **Browser/fallback:** The current renderer stores serialized workflows in `localStorage` under `todo_desktop_workflows_v1`; it does not yet provide SQL-backed offline sync in a browser.
 
 Native hosts keep database and file operations outside the React UI and expose
-only application-level commands. SQLite supports indexed queries and
-transactional outbox writes without requiring a network connection. The
-outbox keeps an operation ID and expected server version so retries are
-idempotent and concurrent edits can be reported as conflicts instead of
-silently overwriting data.
+only application-level commands. Tauri uses SQLite for local persistence;
+server synchronization and an outbox are not yet connected to the desktop UI.
 
 ### Shared workflows and server sync
 
@@ -51,13 +46,14 @@ membership, and server-side RPCs validate writes and roles. Indexed SQL RPCs
 provide bounded keyset pages rather than fetching and sorting an entire task
 list on each request.
 
-Clients push batches of outbox operations with optimistic versions, then pull
-bounded change events by cursor. A conflict returns the server version for
-explicit resolution. If event history has been pruned, the server requires a
-fresh membership-visible snapshot before sync resumes. Offline edits remain
-in the local outbox until the server acknowledges or the user resolves them.
-The global transactional cursor favors reliable ordered sync and simple
-recovery; a much higher write rate may call for per-workflow cursor streams.
+The server RPCs support clients pushing batches of outbox operations with
+optimistic versions, then pulling bounded change events by cursor. A conflict
+returns the server version for explicit resolution. If event history has been
+pruned, the server requires a fresh membership-visible snapshot before sync
+resumes. The desktop UI does not yet call these RPCs; local SQLite changes are
+not synchronized with Supabase. The global transactional cursor favors
+reliable ordered sync and simple recovery; a much higher write rate may call
+for per-workflow cursor streams.
 
 See [supabase/README.md](./supabase/README.md) for setup, RPC payloads, cursor
 handling, role rules, and deployment guidance. Desktop clients must use only a
