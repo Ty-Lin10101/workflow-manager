@@ -17,34 +17,37 @@ function createWindow() {
     }
   })
 
-  const devUrl = 'http://localhost:5173'
+  const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173'
   if (process.env.NODE_ENV === 'development' || process.env.VITE_DEV_SERVER_URL) {
-    win.loadURL(devUrl)
+    void win.loadURL(devUrl).catch((error) => {
+      console.error('Failed to load the Electron development server:', error)
+    })
   } else {
-    win.loadFile(path.join(__dirname, '../index.html'))
+    void win.loadFile(path.join(__dirname, '../dist/index.html')).catch((error) => {
+      console.error('Failed to load the built Electron frontend:', error)
+    })
   }
 }
 
 ipcMain.handle('load-workflows', async () => {
+  const p = dataFilePath()
   try {
-    const p = dataFilePath()
-    if (!fs.existsSync(p)) return null
-    const raw = await fs.promises.readFile(p, 'utf8')
-    return raw
-  } catch (e) {
-    return null
+    return await fs.promises.readFile(p, 'utf8')
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
   }
 })
 
 ipcMain.handle('save-workflows', async (_, { data }) => {
-  try {
-    const p = dataFilePath()
-    await fs.promises.mkdir(path.dirname(p), { recursive: true })
-    await fs.promises.writeFile(p, data, 'utf8')
-    return true
-  } catch (e) {
-    return false
+  if (typeof data !== 'string') {
+    throw new TypeError('Workflow data must be a string')
   }
+
+  const p = dataFilePath()
+  await fs.promises.mkdir(path.dirname(p), { recursive: true })
+  await fs.promises.writeFile(p, data, 'utf8')
+  return true
 })
 
 app.whenReady().then(() => {

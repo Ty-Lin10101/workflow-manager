@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Workflow, TodoItem } from '../models'
 import NewTodoForm from './NewTodoForm'
 
@@ -15,6 +15,7 @@ export default function TodoList({ workflow, onChange, onClearCompleted }: Props
   const [sortMode, setSortMode] = useState<SortMode>('manual')
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
   const [draggedId, setDraggedId] = useState<string | null>(null)
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState({
     description: '',
@@ -22,6 +23,57 @@ export default function TodoList({ workflow, onChange, onClearCompleted }: Props
     durationMinutes: '' as number | '',
     notes: ''
   })
+
+  const reorderTodos = useCallback(
+    (fromId: string, toId: string) => {
+      if (fromId === toId) return
+
+      const next = [...workflow.todos]
+      const fromIndex = next.findIndex((t: TodoItem) => t.id === fromId)
+      const toIndex = next.findIndex((t: TodoItem) => t.id === toId)
+
+      if (fromIndex < 0 || toIndex < 0) return
+
+      const [moved] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, moved)
+      onChange({ ...workflow, todos: next })
+    },
+    [onChange, workflow]
+  )
+
+  useEffect(() => {
+    if (!draggedId) return
+
+    const getTodoId = (event: PointerEvent) => {
+      const target = document.elementFromPoint(event.clientX, event.clientY)
+      return target instanceof Element
+        ? target.closest<HTMLElement>('[data-todo-id]')?.dataset.todoId ?? null
+        : null
+    }
+    const handlePointerMove = (event: PointerEvent) => {
+      const targetId = getTodoId(event)
+      setDropTargetId((current) => (current === targetId ? current : targetId))
+    }
+    const handlePointerUp = (event: PointerEvent) => {
+      const targetId = getTodoId(event)
+      if (sortMode === 'manual' && targetId) reorderTodos(draggedId, targetId)
+      setDraggedId(null)
+      setDropTargetId(null)
+    }
+    const handlePointerCancel = () => {
+      setDraggedId(null)
+      setDropTargetId(null)
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    window.addEventListener('pointercancel', handlePointerCancel)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+      window.removeEventListener('pointercancel', handlePointerCancel)
+    }
+  }, [draggedId, reorderTodos, sortMode])
 
   const startEditing = (task: TodoItem) => {
     setEditingId(task.id)
@@ -54,20 +106,6 @@ export default function TodoList({ workflow, onChange, onClearCompleted }: Props
 
     setEditingId(null)
     setEditDraft({ description: '', due: '', durationMinutes: '', notes: '' })
-  }
-
-  const reorderTodos = (fromId: string, toId: string) => {
-    if (fromId === toId) return
-
-    const next = [...workflow.todos]
-    const fromIndex = next.findIndex((t: TodoItem) => t.id === fromId)
-    const toIndex = next.findIndex((t: TodoItem) => t.id === toId)
-
-    if (fromIndex < 0 || toIndex < 0) return
-
-    const [moved] = next.splice(fromIndex, 1)
-    next.splice(toIndex, 0, moved)
-    onChange({ ...workflow, todos: next })
   }
 
   const visibleTodos = useMemo(() => {
@@ -156,22 +194,19 @@ export default function TodoList({ workflow, onChange, onClearCompleted }: Props
         {visibleTodos.map((t: TodoItem) => (
           <li
             key={t.id}
-            className={`todo ${t.completed ? 'done' : ''} ${draggedId === t.id ? 'dragging' : ''}`}
-            draggable={sortMode === 'manual'}
-            onDragStart={() => sortMode === 'manual' && setDraggedId(t.id)}
-            onDragEnd={() => setDraggedId(null)}
-            onDragOver={(e) => {
-              if (sortMode === 'manual') e.preventDefault()
-            }}
-            onDrop={() => {
-              if (sortMode === 'manual' && draggedId) {
-                reorderTodos(draggedId, t.id)
-                setDraggedId(null)
-              }
-            }}
+            data-todo-id={t.id}
+            className={`todo ${t.completed ? 'done' : ''} ${draggedId === t.id ? 'dragging' : ''} ${dropTargetId === t.id ? 'drop-target' : ''}`}
           >
             {sortMode === 'manual' && (
-              <span className="drag-indicator" aria-hidden="true" title="Drag to reorder">
+              <span
+                className="drag-indicator"
+                title="Drag to reorder"
+                onPointerDown={(e) => {
+                  e.preventDefault()
+                  setDraggedId(t.id)
+                  setDropTargetId(t.id)
+                }}
+              >
                 ⋮⋮
               </span>
             )}

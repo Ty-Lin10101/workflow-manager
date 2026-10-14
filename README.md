@@ -29,7 +29,7 @@ The UI is split by responsibility while the app-level state stays in one place. 
 The renderer persists through its host `loadWorkflows` / `saveWorkflows`
 methods when available, then falls back to browser `localStorage`.
 
-- **Electron:** `electron/main.js` owns filesystem access and IPC. `electron/preload.js` exposes the existing workflow snapshot methods. Electron persistence remains JSON-based and is deferred from the current Tauri-focused backend scope.
+- **Electron:** `electron/main.js` owns filesystem access and IPC. `electron/preload.js` exposes the workflow snapshot methods. Workflows are saved as JSON in Electron's per-user application data directory.
 - **Tauri:** `src-tauri/src/lib.rs` stores workflows and tasks in SQLite under the platform-specific application data directory. Workflow and task ordering, due dates, durations, notes, and completion state are persisted transactionally. On first run it imports an existing `workflows.json` file from that directory.
 - **Browser/fallback:** The current renderer stores serialized workflows in `localStorage` under `todo_desktop_workflows_v1`; it does not yet provide SQL-backed offline sync in a browser.
 
@@ -84,6 +84,15 @@ Run the Electron development command:
 npm run start:electron
 ```
 
+Build the Windows Electron installer:
+
+```bash
+npm run build:electron
+```
+
+The installer is written to `electron-dist/`. Electron stores its workflows
+separately from the Tauri app.
+
 Run the Tauri development app (requires the Rust toolchain and platform prerequisites for Tauri):
 
 ```bash
@@ -95,6 +104,8 @@ npm run tauri:dev
 ```bash
 npm run build       # Build the frontend into dist/
 npm run tauri:build # Build the Tauri desktop app
+npm run build:electron # Build the Electron Windows installer
 ```
 
-`npm run preview` serves the production frontend locally. The Electron runtime is launched through the `main` entry in `package.json` (`electron/main.js`).
+`npm run preview` serves the production frontend locally. The Electron runtime
+is launched through the `main` entry in `package.json` (`electron/main.js`).

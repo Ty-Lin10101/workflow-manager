@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start:electron": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "start:electron": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env NODE_ENV=development electron .\"",
+    "build:electron": "npm run build && electron-builder --win nsis",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
@@ -22,10 +23,35 @@
     "@types/react-dom": "18.0.11",
     "concurrently": "7.6.0",
     "wait-on": "7.0.1",
-    "electron": "26.1.0",
+    "electron": "^44.7.2",
+    "electron-builder": "^26.15.3",
+    "cross-env": "^10.1.0",
     "typescript": "5.1.6",
     "vite": "5.1.0",
     "@vitejs/plugin-react": "4.3.4",
     "@tauri-apps/cli": "2.3.0"
+  },
+  "build": {
+    "appId": "com.todo.desktop.electron",
+    "productName": "Todo Desktop",
+    "directories": {
+      "output": "electron-dist"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/main.js",
+      "electron/preload.js",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
