@@ -161,8 +161,16 @@ create policy sync_events_read_member
   using (
     (entity_type = 'workflow_order' and changed_by = auth.uid())
     or (
-      entity_type <> 'workflow_order'
-      and public.is_workflow_member(workflow_id)
+      public.is_workflow_member(workflow_id)
+      and (
+        exists (
+          select 1
+          from public.workflows workflow
+          where workflow.id = workflow_id
+            and workflow.deleted_at is null
+        )
+        or (entity_type = 'workflow' and action = 'delete')
+      )
     )
   );
 
@@ -734,12 +742,15 @@ begin
     if coalesce(v_role not in ('owner', 'editor'), true) then
       raise exception 'The current user cannot edit this workflow';
     end if;
-    if exists (
-      select 1
-      from public.workflows workflow
-      where workflow.id = v_workflow_id
-        and workflow.deleted_at is not null
-    ) then
+    select *
+    into v_workflow
+    from public.workflows
+    where id = v_workflow_id
+    for share;
+    if not found then
+      raise exception 'The workflow does not exist';
+    end if;
+    if v_workflow.deleted_at is not null then
       raise exception 'The workflow has been deleted';
     end if;
 
@@ -983,10 +994,21 @@ begin
     from public.sync_events event
     where event.cursor > p_cursor
       and (
-        public.is_workflow_member(event.workflow_id)
-        or (
+        (
           event.entity_type = 'workflow_order'
           and event.changed_by = auth.uid()
+        )
+        or (
+          public.is_workflow_member(event.workflow_id)
+          and (
+            exists (
+              select 1
+              from public.workflows workflow
+              where workflow.id = event.workflow_id
+                and workflow.deleted_at is null
+            )
+            or (event.entity_type = 'workflow' and event.action = 'delete')
+          )
         )
       )
     order by event.cursor
@@ -1099,13 +1121,13 @@ begin
   if p_user_id is null then
     raise exception 'user_id is required';
   end if;
-  if not exists (
-    select 1
-    from public.workflows workflow
-    where workflow.id = p_workflow_id
-      and workflow.owner_id = auth.uid()
-      and workflow.deleted_at is null
-  ) then
+  perform 1
+  from public.workflows workflow
+  where workflow.id = p_workflow_id
+    and workflow.owner_id = auth.uid()
+    and workflow.deleted_at is null
+  for update;
+  if not found then
     raise exception 'Only the workflow owner can manage sharing';
   end if;
   if p_user_id = auth.uid() then
