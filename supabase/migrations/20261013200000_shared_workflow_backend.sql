@@ -181,7 +181,16 @@ create function public.list_workflows(
   p_after_id uuid default null,
   p_limit integer default 100
 )
-returns setof public.workflows
+returns table (
+  id uuid,
+  name text,
+  owner_id uuid,
+  version bigint,
+  created_at timestamptz,
+  updated_at timestamptz,
+  deleted_at timestamptz,
+  position bigint
+)
 language plpgsql
 stable
 security invoker
@@ -205,7 +214,7 @@ begin
 
   if p_sort = 'manual' then
     return query
-    select workflow.*
+    select workflow.*, member.position
     from public.workflows workflow
     join public.workflow_members member on member.workflow_id = workflow.id
     where member.user_id = auth.uid()
@@ -218,7 +227,7 @@ begin
     limit greatest(1, least(coalesce(p_limit, 100), 1000));
   else
     return query
-    select workflow.*
+    select workflow.*, member.position
     from public.workflows workflow
     join public.workflow_members member on member.workflow_id = workflow.id
     where member.user_id = auth.uid()
@@ -663,7 +672,12 @@ begin
     elsif coalesce(v_role not in ('owner', 'editor'), true) then
       raise exception 'The current user cannot edit this workflow';
     elsif v_workflow.deleted_at is not null then
-      raise exception 'The workflow has been deleted';
+      v_result := jsonb_build_object(
+        'status', 'conflict',
+        'entity_type', v_entity_type,
+        'entity_id', v_entity_id,
+        'current', to_jsonb(v_workflow)
+      );
     elsif v_expected_version is null or v_expected_version <> v_workflow.version then
       v_result := jsonb_build_object(
         'status', 'conflict',
@@ -1001,6 +1015,22 @@ begin
 end;
 $$;
 
+create function public.sync_snapshot_anchor()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select jsonb_build_object(
+    'cursor', clock.last_cursor,
+    'min_retained_cursor', clock.min_retained_cursor
+  )
+  from public.sync_clock clock
+  where clock.singleton
+    and auth.uid() is not null;
+$$;
+
 -- Run only from a trusted maintenance job. Clients with older cursors are
 -- instructed to rebuild their local snapshot before continuing to sync.
 create function public.prune_sync_events(p_through_cursor bigint)
@@ -1204,6 +1234,7 @@ $$;
 revoke all on function public.apply_sync_operation(jsonb) from public, anon, authenticated;
 revoke all on function public.sync_apply_batch(jsonb) from public, anon;
 revoke all on function public.sync_pull(bigint, integer) from public, anon;
+revoke all on function public.sync_snapshot_anchor() from public, anon;
 revoke all on function public.list_workflows(text, bigint, text, uuid, integer) from public, anon;
 revoke all on function public.list_todos(uuid, text, text, jsonb, integer) from public, anon;
 revoke all on function public.prune_sync_events(bigint) from public, anon, authenticated;
@@ -1213,6 +1244,7 @@ revoke all on function public.set_workflow_order(uuid[]) from public, anon;
 
 grant execute on function public.sync_apply_batch(jsonb) to authenticated;
 grant execute on function public.sync_pull(bigint, integer) to authenticated;
+grant execute on function public.sync_snapshot_anchor() to authenticated;
 grant execute on function public.list_workflows(text, bigint, text, uuid, integer) to authenticated;
 grant execute on function public.list_todos(uuid, text, text, jsonb, integer) to authenticated;
 grant execute on function public.prune_sync_events(bigint) to service_role;
