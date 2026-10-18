@@ -1,17 +1,22 @@
-# Todo Desktop
+# Workflow Manager
 
-Todo Desktop is a small desktop task manager organized around workflows. A workflow contains an ordered list of tasks, and each task can have a description, due date and time, estimated duration, notes, and a completion state.
+Workflow Manager is a small desktop task manager organized around workflows. A workflow contains an ordered list of tasks, and each task can have a description, due date and time, estimated duration, notes, and a completion state.
 
 ## Architecture
 
-The app has a shared React and TypeScript frontend, built by Vite, with desktop host options for Electron and Tauri. The frontend can also run in a browser. The backend foundation adds local SQL storage for offline use and a Supabase/PostgreSQL service for shared workflows.
+The app has a shared React and TypeScript frontend, built by Vite, with desktop host options for Electron and Tauri. The frontend can also run in a browser. The repository includes a local SQLite backend for Tauri and a Supabase/PostgreSQL backend foundation for future shared workflows.
 
 ```text
 React UI (src/)
     ├── Electron preload bridge → Electron main process → legacy JSON persistence (not in current backend scope)
     ├── Tauri invoke commands → Rust host → local SQLite + outbox
-    └── Supabase Auth + PostgreSQL → shared workflows + sync event feed
+    └── Supabase Auth + PostgreSQL (backend foundation; not connected to the app)
 ```
+
+**Supabase sync is not implemented in the app yet.** The database schema and
+sync RPCs are backend groundwork only; the browser, Electron, and Tauri apps do
+not currently use them. Workflows remain local to each browser or desktop
+installation, and users cannot share workflow data through the app.
 
 ### Frontend
 
@@ -30,14 +35,18 @@ The renderer persists through its host `loadWorkflows` / `saveWorkflows`
 methods when available, then falls back to browser `localStorage`.
 
 - **Electron:** `electron/main.js` owns filesystem access and IPC. `electron/preload.js` exposes the workflow snapshot methods. Workflows are saved as JSON in Electron's per-user application data directory.
-- **Tauri:** `src-tauri/src/lib.rs` stores workflows and tasks in SQLite under the platform-specific application data directory. Workflow and task ordering, due dates, durations, notes, and completion state are persisted transactionally. On first run it imports an existing `workflows.json` file from that directory.
+- **Tauri:** `src-tauri/src/lib.rs` stores workflows and tasks in SQLite under the platform-specific application data directory. Workflow and task ordering, due dates, durations, notes, and completion state are persisted transactionally. On first run it imports an existing `workflows.json` file from the Tauri application data directory; it does not import Electron's data file.
 - **Browser/fallback:** The current renderer stores serialized workflows in `localStorage` under `todo_desktop_workflows_v1`; it does not yet provide SQL-backed offline sync in a browser.
+
+Electron and Tauri keep workflows in separate local stores. Changes made in one
+app do not appear in the other, even when both are installed on the same
+computer; there is no cross-host synchronization.
 
 Native hosts keep database and file operations outside the React UI and expose
 only application-level commands. Tauri uses SQLite for local persistence;
 server synchronization and an outbox are not yet connected to the desktop UI.
 
-### Shared workflows and server sync
+### Shared workflow backend (not yet used by the app)
 
 Supabase provides hosted PostgreSQL and user authentication. The database
 migration under `supabase/migrations/` creates normalized workflow, task,
@@ -77,6 +86,19 @@ Run the browser development server:
 ```bash
 npm run dev
 ```
+
+To let other people on your local network open your running development app,
+start the server on your computer with:
+
+```bash
+npm run dev -- --host 0.0.0.0
+```
+
+Share the **Network** URL printed by Vite with people on the same network. They
+can open it in a browser without installing the app. The server is only
+reachable on your local network (and may require allowing port `5173` through
+your firewall); this does not publish the app to the internet. Workflows stay
+in each visitor's browser storage, so users do not share data.
 
 Run the Electron development command:
 
